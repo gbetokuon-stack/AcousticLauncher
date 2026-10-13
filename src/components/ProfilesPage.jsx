@@ -5,8 +5,9 @@ import {
   Plus, FolderOpen, Trash, Play, Stop, Check, Stack, Clock, Cpu,
   PuzzlePiece, PencilSimple, DownloadSimple, CircleNotch,
   CaretDown, CaretRight, Gear, Terminal, X, MagnifyingGlass,
-  ArrowLeft, ToggleLeft, ToggleRight, Copy, Image, Sliders, Globe, Sparkle
+  ArrowLeft, ToggleLeft, ToggleRight, Copy, Image, Sliders, Globe, Sparkle, Lightning
 } from '@phosphor-icons/react'
+import OptimizerModal from './mods/OptimizerModal.jsx'
 import {
   DragonTailIcon,
   TohruHornsIcon,
@@ -991,6 +992,8 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
   const [search, setSearch] = useState('')
   const [deletingModFile, setDeletingModFile] = useState(null)
   const [expandedMod, setExpandedMod] = useState(null)
+  const [checkingMissing, setCheckingMissing] = useState(false)
+  const [showOptimizerModal, setShowOptimizerModal] = useState(false)
 
   // Other tabs state
   const [resourcePacks, setResourcePacks] = useState([])
@@ -1077,16 +1080,67 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
     }
   }
 
+  const handleCheckMissing = async () => {
+    if (!window.electronAPI?.checkProfileMissingMods) return
+    setCheckingMissing(true)
+    try {
+      const res = await window.electronAPI.checkProfileMissingMods(profile.id)
+      if (res?.missingMods?.length > 0) {
+        toast.push({
+          type: 'warn',
+          message: `Phát hiện ${res.missingMods.length} mod phụ thuộc còn thiếu: ${res.missingMods.map(m => m.depId).slice(0, 3).join(', ')}${res.missingMods.length > 3 ? '...' : ''}!`
+        })
+      } else {
+        toast.push({
+          type: 'success',
+          message: 'Tuyệt vời! Không phát hiện mod phụ thuộc nào bị thiếu.'
+        })
+      }
+    } catch (err) {
+      toast.push({ type: 'error', message: err.message })
+    } finally {
+      setCheckingMissing(false)
+    }
+  }
+
   const handleApplyPreset = (presetKey) => {
     setJvmPreset(presetKey)
     if (presetKey === 'aikar') {
-      setJvmArgs('# Aikar\'s Flags (Mặc định cho Minecraft mượt mà)\n-XX:+UseG1GC\n-XX:+ParallelRefProcEnabled\n-XX:MaxGCPauseMillis=200\n-XX:+UnlockExperimentalVMOptions\n-XX:+DisableExplicitGC\n-XX:+AlwaysPreTouch')
+      setJvmArgs('# Aikar\'s Flags — Tối ưu triệt để G1GC, giảm micro-stutter\n-XX:+UseG1GC\n-XX:+ParallelRefProcEnabled\n-XX:MaxGCPauseMillis=200\n-XX:+UnlockExperimentalVMOptions\n-XX:+DisableExplicitGC\n-XX:+AlwaysPreTouch\n-XX:G1NewSizePercent=30\n-XX:G1MaxNewSizePercent=40\n-XX:G1HeapRegionSize=8M\n-XX:G1ReservePercent=20\n-XX:G1HeapWastePercent=5\n-XX:G1MixedGCCountTarget=4\n-XX:InitiatingHeapOccupancyPercent=15\n-XX:G1MixedGCLiveThresholdPercent=90\n-XX:G1RSetUpdatingPauseTimePercent=5\n-XX:SurvivorRatio=32\n-XX:+PerfDisableSharedMem\n-XX:MaxTenuringThreshold=1')
     } else if (presetKey === 'zgc') {
-      setJvmArgs('# ZGC Ultra-Low Latency Garbage Collector (Yêu cầu Java 17+)\n-XX:+UseZGC\n-XX:+ZGenerational\n-XX:+UnlockExperimentalVMOptions')
+      setJvmArgs('# Generational ZGC — Độ trễ siêu thấp (< 1ms), mượt mà tối đa (Yêu cầu Java 21+)\n-XX:+UseZGC\n-XX:+ZGenerational\n-XX:+UnlockExperimentalVMOptions\n-XX:+AlwaysPreTouch')
+    } else if (presetKey === 'shenandoah') {
+      setJvmArgs('# Shenandoah GC — Phù hợp cho Modpack nặng và máy nhiều RAM\n-XX:+UseShenandoahGC\n-XX:ShenandoahGCMode=iu\n-XX:+UnlockExperimentalVMOptions\n-XX:+AlwaysPreTouch')
     } else if (presetKey === 'potato') {
-      setJvmArgs('# Potato PC — Tiết kiệm RAM tối đa\n-XX:+UseSerialGC\n-Xnoclassgc\n-XX:MinHeapFreeRatio=5\n-XX:MaxHeapFreeRatio=10')
+      setJvmArgs('# Potato PC — Tiết kiệm RAM tối đa cho máy 4GB RAM\n-XX:+UseSerialGC\n-Xnoclassgc\n-XX:MinHeapFreeRatio=5\n-XX:MaxHeapFreeRatio=10')
     } else if (presetKey === 'default') {
       setJvmArgs('')
+    }
+  }
+
+  const handleAutoOptimize = async () => {
+    try {
+      const stats = await window.electronAPI?.getSystemStats?.()
+      const totalMem = stats?.totalMemGb || 8
+      let optRam = 4
+      if (totalMem >= 24) optRam = 8
+      else if (totalMem >= 12) optRam = 6
+      else if (totalMem >= 8) optRam = 4
+      else optRam = 3
+
+      setRam(optRam)
+
+      const gv = profile.gameVersion || '1.20.1'
+      const isModernJava = gv.startsWith('1.21') || gv.startsWith('1.20.5') || gv.startsWith('1.20.6')
+      const chosenPreset = isModernJava ? 'zgc' : 'aikar'
+      handleApplyPreset(chosenPreset)
+
+      toast.push({
+        type: 'success',
+        message: `Đã tự động tối ưu: Phân bổ ${optRam}GB RAM & bật cờ ${chosenPreset.toUpperCase()}!`
+      })
+    } catch (err) {
+      toast.push({ type: 'error', message: err.message })
     }
   }
 
@@ -1227,6 +1281,27 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setShowOptimizerModal(true)}
+                    className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold border-none shadow-md shadow-orange-500/20"
+                    title="Cài đặt nhanh các mod tối ưu tăng FPS: Sodium, Lithium, FerriteCore..."
+                  >
+                    <Lightning size={13} weight="fill" />
+                    Gói Mod Tối Ưu
+                  </Button>
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={handleCheckMissing}
+                    disabled={checkingMissing}
+                    className="gap-1.5 text-accent hover:text-accentstrong"
+                    title="Kiểm tra xem profile có bị thiếu mod phụ thuộc nào không"
+                  >
+                    <Sparkle size={13} weight="fill" />
+                    {checkingMissing ? 'Đang kiểm tra...' : 'Tìm mod còn thiếu'}
+                  </Button>
                   <Button
                     variant="subtle"
                     size="sm"
@@ -1588,17 +1663,28 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
           <div className="max-w-3xl space-y-5">
             {/* JVM Presets Card */}
             <Card className="p-5 space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-bold text-fg">Bộ Tối Ưu Hóa JVM Presets</h3>
                   <p className="text-xs text-fgfaint mt-0.5">Chọn bộ cờ tối ưu Garbage Collector để giảm giật lag khung hình.</p>
                 </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleAutoOptimize}
+                  className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold border-none shadow-md shadow-orange-500/20 shrink-0"
+                  title="Tự động phát hiện cấu hình máy và áp dụng phân bổ RAM cùng bộ cờ tối ưu nhất"
+                >
+                  <Lightning size={14} weight="fill" />
+                  Tự Động Tối Ưu (Auto-Optimize)
+                </Button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                 {[
-                  { key: 'aikar', label: 'Aikar\'s Flags', tag: 'Khuyến nghị' },
-                  { key: 'zgc', label: 'ZGC Latency', tag: 'Java 17+' },
+                  { key: 'aikar', label: 'Aikar\'s Flags', tag: 'G1GC Khuyên Dùng' },
+                  { key: 'zgc', label: 'ZGC Latency', tag: 'Java 21+ Siêu Mượt' },
+                  { key: 'shenandoah', label: 'Shenandoah', tag: 'Modpack Nặng' },
                   { key: 'potato', label: 'Potato PC', tag: 'Tiết kiệm RAM' },
                   { key: 'default', label: 'Mặc định', tag: 'Chuẩn' },
                 ].map((p) => {
@@ -1726,6 +1812,19 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Optimizer Mods Modal */}
+      {showOptimizerModal && (
+        <OptimizerModal
+          isOpen={showOptimizerModal}
+          onClose={() => setShowOptimizerModal(false)}
+          profile={profile}
+          installedMods={mods}
+          onInstalled={async () => {
+            await loadMods()
+          }}
+        />
       )}
     </div>
   )

@@ -11,6 +11,8 @@ import {
 } from '@phosphor-icons/react'
 import { formatDownloads, formatDate } from './shared.jsx'
 import { useToast } from '../../hooks/useToast.jsx'
+import ManualDownloadModal from './ManualDownloadModal.jsx'
+import DependencyConfirmModal from './DependencyConfirmModal.jsx'
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI
 
@@ -73,6 +75,11 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
   const [allProfiles, setAllProfiles] = useState([])
   const [importProgress, setImportProgress] = useState(null)
   const [showProgressModal, setShowProgressModal] = useState(false)
+
+  const [dependencyCheckData, setDependencyCheckData] = useState(null)
+  const [showDependencyModal, setShowDependencyModal] = useState(false)
+  const [manualDownloadData, setManualDownloadData] = useState({ items: [], profileId: '' })
+  const [showManualDownloadModal, setShowManualDownloadModal] = useState(false)
 
   const [project, setProject] = useState(null)
   const [versions, setVersions] = useState([])
@@ -174,7 +181,7 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
     }
   }
 
-  // Handle install
+  // Handle install with auto-dependency checking and manual download fallback
   const handleInstall = async (profileId) => {
     if (!selectedVersion || !profileId) return
     setInstalling(true)
@@ -188,6 +195,43 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
     if (type === 'datapack' || type === 'datapacks') normalizedType = 'datapack'
 
     try {
+      // For mods, check dependencies first
+      if (normalizedType === 'mod' && window.electronAPI?.checkModDependencies) {
+        showToast('Đang kiểm tra các mod phụ thuộc còn thiếu...', 'info')
+        const depCheck = await window.electronAPI.checkModDependencies({
+          platform,
+          modId: projectId,
+          versionId: selectedVersion.id,
+          profileId,
+          projectType: normalizedType,
+        })
+
+        if (depCheck && !depCheck.error) {
+          if (depCheck.hasMissing) {
+            setDependencyCheckData({
+              targetMod: depCheck.targetMod,
+              missingDependencies: depCheck.missingDependencies,
+              alreadySatisfied: depCheck.alreadySatisfied,
+              profileId,
+              normalizedType,
+            })
+            setShowProfileModal(false)
+            setShowDependencyModal(true)
+            setInstalling(false)
+            return
+          } else if (depCheck.targetMod?.needsManualDownload) {
+            setManualDownloadData({
+              items: [depCheck.targetMod],
+              profileId,
+            })
+            setShowProfileModal(false)
+            setShowManualDownloadModal(true)
+            setInstalling(false)
+            return
+          }
+        }
+      }
+
       // Call install API
       if (window.electronAPI.installMod) {
         const res = await window.electronAPI.installMod({
@@ -199,6 +243,16 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
         })
         if (res && res.error) {
           throw new Error(res.error)
+        }
+        if (res?.needsManualDownload) {
+          setManualDownloadData({
+            items: [res],
+            profileId,
+          })
+          setShowProfileModal(false)
+          setShowManualDownloadModal(true)
+          setInstalling(false)
+          return
         }
         showToast(`Đã cài đặt thành công ${selectedVersion.name || selectedVersion.version}!`, 'success')
       } else {
@@ -214,6 +268,55 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
     } catch (err) {
       setInstallError(err.message)
       showToast(err.message || 'Lỗi cài đặt', 'error')
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const handleConfirmDependencies = async ({ includeDependencies, selectedDependencies }) => {
+    setShowDependencyModal(false)
+    if (!dependencyCheckData) return
+    const { profileId, targetMod, normalizedType } = dependencyCheckData
+
+    setInstalling(true)
+    showToast('Đang cài đặt mod và các phụ thuộc...', 'info')
+
+    try {
+      const itemsToInstall = [targetMod]
+      if (includeDependencies && selectedDependencies?.length) {
+        itemsToInstall.push(...selectedDependencies)
+      }
+
+      if (window.electronAPI?.installBatchMods) {
+        const res = await window.electronAPI.installBatchMods({
+          profileId,
+          projectType: normalizedType,
+          items: itemsToInstall,
+        })
+
+        if (res?.installed?.length) {
+          showToast(`Đã cài đặt ${res.installed.length} mod thành công!`, 'success')
+        }
+
+        if (res?.needsManual?.length) {
+          setManualDownloadData({
+            items: res.needsManual,
+            profileId,
+          })
+          setShowManualDownloadModal(true)
+        }
+      } else {
+        await window.electronAPI.installMod({
+          platform,
+          modId: targetMod.modId || projectId,
+          versionId: targetMod.versionId,
+          profileId,
+          projectType: normalizedType,
+        })
+        showToast(`Đã cài đặt thành công ${targetMod.name}!`, 'success')
+      }
+    } catch (err) {
+      showToast('Lỗi khi cài đặt phụ thuộc: ' + err.message, 'error')
     } finally {
       setInstalling(false)
     }
@@ -294,12 +397,23 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
       unsubProgress = window.electronAPI.onImportProgress((data) => {
         setImportProgress(data)
         if (data.phase === 'done') {
-          showToast('Cài đặt Modpack thành công! Đã tạo profile mới.', 'success')
-          setTimeout(() => {
+          if (data.blockedMods?.length) {
+            setManualDownloadData({
+              items: data.blockedMods,
+              profileId: data.profileId
+            })
+            setShowManualDownloadModal(true)
+            showToast(`Modpack có ${data.blockedMods.length} mod cần mở trình duyệt để tải!`, 'info')
             setShowProgressModal(false)
             setImportProgress(null)
-            if (onBack) onBack()
-          }, 1500)
+          } else {
+            showToast('Cài đặt Modpack thành công! Đã tạo profile mới.', 'success')
+            setTimeout(() => {
+              setShowProgressModal(false)
+              setImportProgress(null)
+              if (onBack) onBack()
+            }, 1500)
+          }
         } else if (data.phase === 'error') {
           showToast(data.log || 'Có lỗi xảy ra trong quá trình cài đặt.', 'error')
         }
@@ -321,6 +435,14 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
 
       if (res && res.error) {
         showToast(res.error, 'error')
+        setShowProgressModal(false)
+        setImportProgress(null)
+      } else if (res?.blockedMods?.length) {
+        setManualDownloadData({
+          items: res.blockedMods,
+          profileId: res.profileId
+        })
+        setShowManualDownloadModal(true)
         setShowProgressModal(false)
         setImportProgress(null)
       }
@@ -875,6 +997,32 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
             )}
           </div>
         </div>
+      )}
+
+      {/* Dependency Confirmation Modal */}
+      {showDependencyModal && dependencyCheckData && (
+        <DependencyConfirmModal
+          isOpen={showDependencyModal}
+          onClose={() => setShowDependencyModal(false)}
+          targetMod={dependencyCheckData.targetMod}
+          missingDependencies={dependencyCheckData.missingDependencies}
+          alreadySatisfied={dependencyCheckData.alreadySatisfied}
+          onConfirmInstall={handleConfirmDependencies}
+        />
+      )}
+
+      {/* PrismLauncher-style Manual Download Modal */}
+      {showManualDownloadModal && (
+        <ManualDownloadModal
+          isOpen={showManualDownloadModal}
+          onClose={() => setShowManualDownloadModal(false)}
+          profileId={manualDownloadData.profileId}
+          items={manualDownloadData.items}
+          onSuccess={() => {
+            showToast('Tất cả mod đã được nạp và hoàn tất cài đặt!', 'success')
+            setShowManualDownloadModal(false)
+          }}
+        />
       )}
     </div>
   )

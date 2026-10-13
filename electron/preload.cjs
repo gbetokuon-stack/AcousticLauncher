@@ -133,6 +133,26 @@ const api = {
 
   // install mod
   installMod:          (opts) => ipcRenderer.invoke('mod:install', opts),
+  checkModDependencies: (opts) => ipcRenderer.invoke('mod:checkDependencies', opts),
+  installBatchMods:     (opts) => ipcRenderer.invoke('mod:installBatch', opts),
+
+  // browser download manager (PrismLauncher-style)
+  startBrowserDownloadWatcher: (opts) => ipcRenderer.invoke('browserDownload:start', opts),
+  stopBrowserDownloadWatcher:  () => ipcRenderer.invoke('browserDownload:stop'),
+  openBrowserDownloadUrl:      (url) => ipcRenderer.invoke('browserDownload:openUrl', url),
+  openDownloadsFolder:         () => ipcRenderer.invoke('browserDownload:openFolder'),
+  pickBrowserDownloadFile:     (opts) => ipcRenderer.invoke('browserDownload:pickFile', opts),
+  dropBrowserDownloadFile:     (opts) => ipcRenderer.invoke('browserDownload:dropFile', opts),
+  onBrowserDownloadDetected:   (cb) => {
+    const handler = (_e, data) => cb(data)
+    ipcRenderer.on('browserDownload:fileDetected', handler)
+    return () => ipcRenderer.removeListener('browserDownload:fileDetected', handler)
+  },
+  onBrowserDownloadAllCompleted: (cb) => {
+    const handler = (_e, data) => cb(data)
+    ipcRenderer.on('browserDownload:allCompleted', handler)
+    return () => ipcRenderer.removeListener('browserDownload:allCompleted', handler)
+  },
 
   downloadAndImportModpack: (opts) => ipcRenderer.invoke('modpack:downloadAndImport', opts),
   onImportProgress: (cb) => {
@@ -140,6 +160,8 @@ const api = {
     ipcRenderer.on('import:progress', handler)
     return () => ipcRenderer.removeListener('import:progress', handler)
   },
+
+  checkProfileMissingMods: (profileId) => ipcRenderer.invoke('profiles:checkMissingMods', profileId),
 
   // local mods management
   listMods:            (profileId, options) => ipcRenderer.invoke('profiles:listMods', profileId, options),

@@ -297,7 +297,159 @@ function registerIpc() {
   const modSearchManager = require('./launcher/modSearchManager.cjs')
   modSearchManager.register({ ipcMain })
 
-  // ── Mod install ───────────────────────────────────────
+  const dependencyResolver = require('./launcher/dependencyResolver.cjs')
+  const browserDownloadManager = require('./launcher/browserDownloadManager.cjs')
+
+  // ── Dependency check & Missing Mods ──────────────────
+  ipcMain.handle('mod:checkDependencies', async (_e, opts) => {
+    const { platform, modId, versionId, profileId } = opts
+    const profileData = readJson(PROFILES_FILE, { profiles: [] })
+    const profile = profileData.profiles.find(p => p.id === profileId)
+    if (!profile) return { error: 'Profile not found' }
+
+    const instancePath = profile.path || path.join(INSTANCES_DIR, profileId)
+    const gameVersion = profile.gameVersion || ''
+    const loader = profile.loader || 'fabric'
+
+    try {
+      return await dependencyResolver.checkModDependencies({
+        platform,
+        modId,
+        versionId,
+        instancePath,
+        gameVersion,
+        loader
+      })
+    } catch (err) {
+      console.error('[Main] checkDependencies error:', err)
+      return { error: err.message }
+    }
+  })
+
+  // ── Batch Mod install (Target mod + Missing dependencies) ──
+  ipcMain.handle('mod:installBatch', async (_e, { profileId, projectType, items }) => {
+    const profileData = readJson(PROFILES_FILE, { profiles: [] })
+    const profile = profileData.profiles.find(p => p.id === profileId)
+    if (!profile) return { error: 'Profile not found' }
+
+    const instancePath = profile.path || path.join(INSTANCES_DIR, profileId)
+    const results = { installed: [], needsManual: [] }
+
+    for (const item of items) {
+      if (item.needsManualDownload) {
+        results.needsManual.push(item)
+        continue
+      }
+
+      try {
+        let res = null
+        if (item.platform === 'modrinth') {
+          const modrinth = require('./launcher/modrinth/modrinthSearch.cjs')
+          res = await modrinth.installVersion({
+            versionId: item.versionId,
+            projectType: projectType || 'mod',
+            instancePath,
+            onProgress: (p) => mainWindow?.webContents.send('install:progress', p)
+          })
+        } else if (item.platform === 'curseforge') {
+          const curseforge = require('./launcher/curseforge/curseForgeSearch.cjs')
+          res = await curseforge.installVersion({
+            versionId: item.versionId,
+            projectId: item.modId,
+            projectType: projectType || 'mod',
+            instancePath,
+            downloadUrl: item.downloadUrl,
+            filename: item.fileName,
+            onProgress: (p) => mainWindow?.webContents.send('install:progress', p)
+          })
+        }
+
+        if (res?.needsManualDownload) {
+          results.needsManual.push({ ...item, ...res })
+        } else {
+          results.installed.push({ ...item, res })
+        }
+      } catch (err) {
+        console.error(`[Main] Error installing ${item.fileName}:`, err.message)
+        results.needsManual.push(item)
+      }
+    }
+
+    return results
+  })
+
+  // ── Browser Download Manager (PrismLauncher-style) ──
+  ipcMain.handle('browserDownload:start', async (_e, { profileId, expectedFiles }) => {
+    const profileData = readJson(PROFILES_FILE, { profiles: [] })
+    const profile = profileData.profiles.find(p => p.id === profileId)
+    if (!profile) return { error: 'Profile not found' }
+    const instancePath = profile.path || path.join(INSTANCES_DIR, profileId)
+
+    return browserDownloadManager.startWatchingSession({
+      mainWindow,
+      instancePath,
+      expectedFiles
+    })
+  })
+
+  ipcMain.handle('browserDownload:stop', async () => {
+    browserDownloadManager.stopWatchingSession()
+    return { ok: true }
+  })
+
+  ipcMain.handle('browserDownload:openUrl', async (_e, url) => {
+    const { shell } = require('electron')
+    if (url) shell.openExternal(url)
+    return { ok: true }
+  })
+
+  ipcMain.handle('browserDownload:openFolder', async () => {
+    return browserDownloadManager.openDownloadsFolder()
+  })
+
+  ipcMain.handle('browserDownload:pickFile', async (_e, { profileId, expectedFileName, id }) => {
+    const profileData = readJson(PROFILES_FILE, { profiles: [] })
+    const profile = profileData.profiles.find(p => p.id === profileId)
+    if (!profile) return { error: 'Profile not found' }
+    const instancePath = profile.path || path.join(INSTANCES_DIR, profileId)
+
+    return browserDownloadManager.pickManualFile(mainWindow, {
+      instancePath,
+      expectedFileName,
+      id
+    })
+  })
+
+  ipcMain.handle('browserDownload:dropFile', async (_e, { profileId, filePath, expectedFileName, id }) => {
+    const profileData = readJson(PROFILES_FILE, { profiles: [] })
+    const profile = profileData.profiles.find(p => p.id === profileId)
+    if (!profile) return { error: 'Profile not found' }
+    const instancePath = profile.path || path.join(INSTANCES_DIR, profileId)
+
+    return browserDownloadManager.handleDroppedFile(mainWindow, {
+      instancePath,
+      filePath,
+      expectedFileName,
+      id
+    })
+  })
+
+  ipcMain.handle('profiles:checkMissingMods', async (_e, profileId) => {
+    const profileData = readJson(PROFILES_FILE, { profiles: [] })
+    const profile = profileData.profiles.find(p => p.id === profileId)
+    if (!profile) return { error: 'Profile not found' }
+    const instancePath = profile.path || path.join(INSTANCES_DIR, profileId)
+    const gameVersion = profile.gameVersion || ''
+    const loader = profile.loader || 'fabric'
+
+    return dependencyResolver.checkProfileMissingMods({
+      instancePath,
+      gameVersion,
+      loader
+    })
+  })
+
+  // ── Mod install (single) ───────────────────────────────
   ipcMain.handle('mod:install', async (_e, opts) => {
     const { platform, modId, versionId, profileId, projectType } = opts
 
@@ -588,8 +740,17 @@ function registerIpc() {
       try { fs.unlinkSync(tmpPath) } catch {}
     }
 
-    sendProgress({ phase: 'done', log: 'Cài đặt Modpack thành công!', percent: 100 })
-    return { ok: true, profileId }
+    const blockedMods = result?.blockedMods || []
+    sendProgress({
+      phase: 'done',
+      log: blockedMods.length > 0
+        ? `Cài đặt Modpack hoàn tất! (${blockedMods.length} mod cần mở trình duyệt để tải)`
+        : 'Cài đặt Modpack thành công!',
+      percent: 100,
+      profileId,
+      blockedMods
+    })
+    return { ok: true, profileId, blockedMods }
   })
 
   // ── Window controls ──────────────────────────────────

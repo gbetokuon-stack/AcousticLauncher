@@ -10,9 +10,11 @@ const UA = 'XForge/1.0.0'
 
 function fetchCf(endpoint) {
   return new Promise((resolve, reject) => {
-    const url = `${BASE}${endpoint}`
+    const startUrl = `${BASE}${endpoint}`
+    const MAX_REDIRECTS = 10
 
-    function doGet(u) {
+    function doGet(u, hops = 0) {
+      if (hops > MAX_REDIRECTS) return reject(new Error(`Too many redirects: ${u}`))
       const client = u.startsWith('https') ? https : http
       const req = client.get(u, {
         headers: { 'Accept': 'application/json', 'User-Agent': UA },
@@ -20,7 +22,11 @@ function fetchCf(endpoint) {
       }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume()
-          return doGet(res.headers.location)
+          let nextUrl = res.headers.location
+          if (!nextUrl.startsWith('http')) {
+            try { nextUrl = new URL(nextUrl, u).href } catch {}
+          }
+          return doGet(nextUrl, hops + 1)
         }
         if (res.statusCode !== 200) {
           res.resume()
@@ -37,7 +43,7 @@ function fetchCf(endpoint) {
       req.on('error', reject)
       req.on('timeout', () => { req.destroy(); reject(new Error(`Timeout: ${u}`)) })
     }
-    doGet(url)
+    doGet(startUrl, 0)
   })
 }
 
@@ -157,8 +163,14 @@ async function getProjectVersions(id, filters = {}) {
       filename: f.fileName,
       size: f.fileLength,
       primary: true
-    }]
+    }],
+    dependencies: f.dependencies || []
   }))
+}
+
+async function getFile(projectId, fileId) {
+  const data = await fetchCfSafe(`/mods/${projectId}/files/${fileId}`)
+  return data?.data || null
 }
 
 async function getCategories(projectType = 'mod') {
@@ -189,14 +201,16 @@ async function installVersion(opts, onProgress) {
     if (fileData && fileData.data) file = fileData.data
   }
   if (!file && opts.downloadUrl && opts.filename) {
-    file = { downloadUrl: opts.downloadUrl, fileName: opts.filename, fileLength: opts.fileLength || 0 }
+    file = { downloadUrl: opts.downloadUrl, fileName: opts.filename, fileLength: opts.fileLength || 0, id: versionId, modId: projectId }
   }
   if (!file) throw new Error('File not found')
 
-  const downloadUrl = file.downloadUrl
+  let downloadUrl = file.downloadUrl
   const filename = file.fileName
 
-  if (!downloadUrl) throw new Error('No download URL available (possibly disabled by author)')
+  if (!downloadUrl && file.id && filename) {
+    downloadUrl = `https://edge.forgecdn.net/files/${Math.floor(file.id / 1000)}/${file.id % 1000}/${encodeURIComponent(filename)}`
+  }
 
   const folderMap = {
     mod: 'mods',
@@ -210,58 +224,101 @@ async function installVersion(opts, onProgress) {
   const destPath = path.join(destDir, filename)
   const tmpPath = destPath + '.tmp'
 
+  if (!downloadUrl) {
+    return {
+      success: false,
+      needsManualDownload: true,
+      platform: 'curseforge',
+      modId: projectId,
+      versionId: file.id,
+      fileName: filename,
+      name: file.displayName || filename,
+      browserUrl: `https://www.curseforge.com/projects/${projectId}/files/${file.id}`
+    }
+  }
+
   if (onProgress) onProgress({ log: `Bắt đầu tải ${filename}...`, percent: 0, total: file.fileLength })
 
-  await new Promise((resolve, reject) => {
-    function doGet(url) {
-      const client = url.startsWith('https') ? https : http
-      const req = client.get(url, { headers: { 'User-Agent': UA }, timeout: 60000 }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume()
-          return doGet(res.headers.location)
-        }
-        if (res.statusCode !== 200) {
-          res.resume()
-          return reject(new Error(`HTTP ${res.statusCode}`))
-        }
-        const total = parseInt(res.headers['content-length'] || String(file.fileLength || 0), 10)
-        let received = 0
-        const startTime = Date.now()
-        const out = fs.createWriteStream(tmpPath)
+  try {
+    await new Promise((resolve, reject) => {
+      const MAX_REDIRECTS = 10
+      function doGet(url, hops = 0) {
+        if (hops > MAX_REDIRECTS) return reject(new Error('Too many redirects'))
+        const client = url.startsWith('https') ? https : http
+        const req = client.get(url, { headers: { 'User-Agent': UA }, timeout: 60000 }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.resume()
+            let nextUrl = res.headers.location
+            if (!nextUrl.startsWith('http')) {
+              try { nextUrl = new URL(nextUrl, url).href } catch {}
+            }
+            return doGet(nextUrl, hops + 1)
+          }
+          if (res.statusCode === 403 || res.statusCode === 404) {
+            res.resume()
+            const err = new Error(`HTTP ${res.statusCode}`)
+            err.statusCode = res.statusCode
+            return reject(err)
+          }
+          if (res.statusCode !== 200) {
+            res.resume()
+            return reject(new Error(`HTTP ${res.statusCode}`))
+          }
+          const total = parseInt(res.headers['content-length'] || String(file.fileLength || 0), 10)
+          let received = 0
+          const startTime = Date.now()
+          const out = fs.createWriteStream(tmpPath)
 
-        res.on('data', chunk => {
-          received += chunk.length
-          if (total > 0 && onProgress) {
-            const pct = Math.round(received / total * 100)
-            const elapsed = (Date.now() - startTime) / 1000
-            const speed = elapsed > 0 ? Math.round(received / elapsed / 1024) : 0
-            onProgress({ log: `Đang tải ${filename}: ${pct}%`, percent: pct, total, received, speed })
-          }
+          res.on('data', chunk => {
+            received += chunk.length
+            if (total > 0 && onProgress) {
+              const pct = Math.round(received / total * 100)
+              const elapsed = (Date.now() - startTime) / 1000
+              const speed = elapsed > 0 ? Math.round(received / elapsed / 1024) : 0
+              onProgress({ log: `Đang tải ${filename}: ${pct}%`, percent: pct, total, received, speed })
+            }
+          })
+          res.pipe(out)
+          out.on('finish', () => {
+            try { fs.renameSync(tmpPath, destPath) } catch {
+              try { fs.copyFileSync(tmpPath, destPath); fs.unlinkSync(tmpPath) } catch {}
+            }
+            resolve()
+          })
+          out.on('error', err => { try { fs.unlinkSync(tmpPath) } catch {}; reject(err) })
+          res.on('error', err => { try { fs.unlinkSync(tmpPath) } catch {}; reject(err) })
         })
-        res.pipe(out)
-        out.on('finish', () => {
-          try { fs.renameSync(tmpPath, destPath) } catch {
-            try { fs.copyFileSync(tmpPath, destPath); fs.unlinkSync(tmpPath) } catch {}
-          }
-          resolve()
-        })
-        out.on('error', err => { try { fs.unlinkSync(tmpPath) } catch {}; reject(err) })
-        res.on('error', err => { try { fs.unlinkSync(tmpPath) } catch {}; reject(err) })
-      })
-      req.on('error', reject)
-      req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')) })
+        req.on('error', reject)
+        req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')) })
+      }
+      doGet(downloadUrl, 0)
+    })
+
+    if (onProgress) onProgress({ log: `Đã cài đặt ${filename}`, percent: 100 })
+    return { success: true, file: filename, path: destPath }
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath) } catch {}
+    if (err.statusCode === 403 || err.statusCode === 404 || err.message.includes('403')) {
+      return {
+        success: false,
+        needsManualDownload: true,
+        platform: 'curseforge',
+        modId: projectId,
+        versionId: file.id,
+        fileName: filename,
+        name: file.displayName || filename,
+        browserUrl: `https://www.curseforge.com/projects/${projectId}/files/${file.id}`
+      }
     }
-    doGet(downloadUrl)
-  })
-
-  if (onProgress) onProgress({ log: `Đã cài đặt ${filename}`, percent: 100 })
-  return { success: true, file: filename }
+    throw err
+  }
 }
 
 module.exports = {
   searchProjects,
   getProject,
   getProjectVersions,
+  getFile,
   getCategories,
   installVersion
 }

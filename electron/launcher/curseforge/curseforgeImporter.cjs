@@ -214,35 +214,38 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
 
   let done = 0
   let skipped = 0
+  const blockedMods = []
 
   onProgress?.({ phase: 'mods', log: `[1/${total}] Đang lấy danh sách URL...`, done: 0, total, percent: 5 })
 
-  const urlResults = []
-  for (const mod of mods) {
-    const url = await getModDownloadUrl(mod.projectID, mod.fileID, apiKey)
-    urlResults.push(url)
-    const idx = urlResults.length
-    if (idx % 10 === 0 || idx === total) {
-      onProgress?.({ phase: 'mods', log: `Đã lấy URL: ${idx}/${total}`, done: idx, total, percent: 5 + Math.round((idx / total) * 15) })
-      await new Promise(r => setImmediate(r))
-    }
-  }
-
   for (let i = 0; i < total; i++) {
+    const mod = mods[i]
     done++
-    const pct = 20 + Math.round((done / total) * 60)
+    const pct = 5 + Math.round((done / total) * 75)
 
-    const url = urlResults[i]
+    let url = await getModDownloadUrl(mod.projectID, mod.fileID, apiKey)
+    let fileName = ''
+
     if (!url) {
-      skipped++
-      onProgress?.({ phase: 'mods', log: `[${done}/${total}] Bỏ qua (không lấy được URL): projectID=${mods[i].projectID}`, done, total, percent: pct })
-      if (done % 3 === 0) await new Promise(r => setImmediate(r))
-      continue
+      // Try fetching file metadata for edge CDN fallback
+      try {
+        const fileInfo = await httpsGetJson(`${CF_PROXY}/mods/${mod.projectID}/files/${mod.fileID}`)
+        if (fileInfo?.data?.fileName) {
+          fileName = fileInfo.data.fileName
+          url = `https://edge.forgecdn.net/files/${Math.floor(mod.fileID / 1000)}/${mod.fileID % 1000}/${encodeURIComponent(fileName)}`
+        }
+      } catch {}
     }
 
-    const fileName = url.split('/').pop().split('?')[0]
-    const destPath = path.join(modsDir, decodeURIComponent(fileName))
+    if (!fileName && url) {
+      fileName = url.split('/').pop().split('?')[0]
+    }
 
+    if (!fileName) {
+      fileName = `mod-${mod.projectID}-${mod.fileID}.jar`
+    }
+
+    const destPath = path.join(modsDir, decodeURIComponent(fileName))
     const exists = await fs.promises.access(destPath).then(() => true).catch(() => false)
     if (exists) {
       onProgress?.({ phase: 'mods', log: `[${done}/${total}] Đã có: ${fileName}`, done, total, percent: pct })
@@ -250,12 +253,28 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
       continue
     }
 
-    onProgress?.({ phase: 'mods', log: `[${done}/${total}] Đang tải: ${fileName}`, done, total, percent: pct })
-    try {
-      await downloadFile(url, destPath)
-    } catch (err) {
+    let downloadSuccess = false
+    if (url) {
+      onProgress?.({ phase: 'mods', log: `[${done}/${total}] Đang tải: ${fileName}`, done, total, percent: pct })
+      try {
+        await downloadFile(url, destPath)
+        downloadSuccess = true
+      } catch (err) {
+        downloadSuccess = false
+      }
+    }
+
+    if (!downloadSuccess) {
       skipped++
-      onProgress?.({ phase: 'mods', log: `[WARN] Lỗi tải ${fileName}: ${err.message}`, done, total, percent: pct })
+      blockedMods.push({
+        id: mod.fileID,
+        projectId: mod.projectID,
+        fileId: mod.fileID,
+        fileName,
+        name: fileName,
+        browserUrl: `https://www.curseforge.com/projects/${mod.projectID}/files/${mod.fileID}`
+      })
+      onProgress?.({ phase: 'mods', log: `[${done}/${total}] Giới hạn tải tự động (sẽ mở trình duyệt): ${fileName}`, done, total, percent: pct })
     }
 
     if (done % 3 === 0) await new Promise(r => setImmediate(r))
@@ -276,12 +295,12 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
     } catch {}
   })
 
-  const msg = skipped > 0
-    ? `Import hoàn tất: ${name} (${skipped} mod bỏ qua — cần CurseForge API key)`
+  const msg = blockedMods.length > 0
+    ? `Import hoàn tất: ${name} (${blockedMods.length} mod cần mở trình duyệt tải như Prism Launcher)`
     : `Import hoàn tất: ${name}`
-  onProgress?.({ phase: 'done', log: msg, percent: 100 })
+  onProgress?.({ phase: 'done', log: msg, percent: 100, blockedMods })
 
-  return { name, gameVersion, loader, loaderVersion, iconUrl, bgUrl: iconUrl }
+  return { name, gameVersion, loader, loaderVersion, iconUrl, bgUrl: iconUrl, blockedMods }
 }
 
 module.exports = { importCurseForgePack }
