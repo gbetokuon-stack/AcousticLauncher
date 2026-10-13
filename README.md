@@ -9,13 +9,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/gbetokuon-stack/AcousticLauncher/releases/tag/v0.1.5">
-    <img src="https://img.shields.io/badge/Release-v0.1.5-brightgreen?style=for-the-badge&logo=github" alt="Release v0.1.5" />
+  <a href="https://github.com/gbetokuon-stack/AcousticLauncher/releases/tag/v0.1.6">
+    <img src="https://img.shields.io/badge/Release-v0.1.6-brightgreen?style=for-the-badge&logo=github" alt="Release v0.1.6" />
   </a>
-  <a href="https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.5/AcousticForge-Portable-0.1.5.exe">
+  <a href="https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.6/AcousticForge-Portable-0.1.6.exe">
     <img src="https://img.shields.io/badge/Download-Portable_EXE-blue?style=for-the-badge&logo=windows" alt="Download Portable" />
   </a>
-  <a href="https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.5/AcousticForge-Setup-0.1.5.exe">
+  <a href="https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.6/AcousticForge-Setup-0.1.6.exe">
     <img src="https://img.shields.io/badge/Download-Setup_Installer-purple?style=for-the-badge&logo=windows" alt="Download Setup" />
   </a>
 </p>
@@ -28,8 +28,8 @@ Người dùng không cần cài đặt môi trường lập trình (Node.js, Gi
 
 | Phiên Bản | Chi Tiết | Dung Lượng | Tải Về Trực Tiếp |
 | :--- | :--- | :---: | :---: |
-| **🚀 AcousticForge Portable** | **Khuyên Dùng:** Mở chạy ngay không cần cài đặt. Thích hợp lưu trữ trên USB hoặc chơi nhanh. | ~214 MB | [⬇️ **Tải AcousticForge-Portable-0.1.5.exe**](https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.5/AcousticForge-Portable-0.1.5.exe) |
-| **📦 AcousticForge Setup** | Bộ cài đặt Windows hoàn chỉnh (Installer), tự tạo biểu tượng Desktop và Start Menu. | ~215 MB | [⬇️ **Tải AcousticForge-Setup-0.1.5.exe**](https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.5/AcousticForge-Setup-0.1.5.exe) |
+| **🚀 AcousticForge Portable** | **Khuyên Dùng:** Mở chạy ngay không cần cài đặt. Thích hợp lưu trữ trên USB hoặc chơi nhanh. | ~215 MB | [⬇️ **Tải AcousticForge-Portable-0.1.6.exe**](https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.6/AcousticForge-Portable-0.1.6.exe) |
+| **📦 AcousticForge Setup** | Bộ cài đặt Windows hoàn chỉnh (Installer), tự tạo biểu tượng Desktop và Start Menu. | ~216 MB | [⬇️ **Tải AcousticForge-Setup-0.1.6.exe**](https://github.com/gbetokuon-stack/AcousticLauncher/releases/download/v0.1.6/AcousticForge-Setup-0.1.6.exe) |
 
 > 📌 **Toàn bộ bản cập nhật:** Truy cập danh sách phiên bản đầy đủ tại [GitHub Releases](https://github.com/gbetokuon-stack/AcousticLauncher/releases).
 
