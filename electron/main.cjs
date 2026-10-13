@@ -653,6 +653,14 @@ function registerIpc() {
     const instancePath = path.join(INSTANCES_DIR, profileId)
     try { fs.mkdirSync(instancePath, { recursive: true }) } catch {}
 
+    const totalRamBytes = os.totalmem()
+    const totalRamGb = Math.round(totalRamBytes / (1024 * 1024 * 1024))
+    let defaultModpackRam = 6
+    if (totalRamGb >= 24) defaultModpackRam = 10
+    else if (totalRamGb >= 14) defaultModpackRam = 8
+    else if (totalRamGb >= 10) defaultModpackRam = 6
+    else defaultModpackRam = 4
+
     const profile = {
       id:            profileId,
       name:          meta.name || 'Modpack',
@@ -665,7 +673,8 @@ function registerIpc() {
       lastPlayed:    null,
       installedAt:   null,
       sizeBytes:     0,
-      ramGb:         4,
+      ramGb:         defaultModpackRam,
+      jvmPreset:     'aikar',
       jvmArgs:       '',
       releaseChannel: 'release',
       javaPath:      '',

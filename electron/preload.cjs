@@ -31,6 +31,7 @@ const api = {
   listResourcePacks:      (id) => ipcRenderer.invoke('profiles:listResourcePacks', id),
   listShaders:            (id) => ipcRenderer.invoke('profiles:listShaders', id),
   listWorlds:             (id) => ipcRenderer.invoke('profiles:listWorlds', id),
+  optimizeGameOptions:    (id) => ipcRenderer.invoke('profiles:optimizeGameOptions', id),
 
   // servers
   getServers:             () => ipcRenderer.invoke('servers:get'),

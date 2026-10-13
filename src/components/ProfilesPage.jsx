@@ -1105,7 +1105,9 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
 
   const handleApplyPreset = (presetKey) => {
     setJvmPreset(presetKey)
-    if (presetKey === 'aikar') {
+    if (presetKey === 'modpack') {
+      setJvmArgs('# Siêu Modpack (100+ Mods) — Tối ưu triệt để G1GC Heap Region 16MB, chống khựng hình khi load thế giới\n-XX:+UseG1GC\n-XX:+ParallelRefProcEnabled\n-XX:MaxGCPauseMillis=200\n-XX:+UnlockExperimentalVMOptions\n-XX:+DisableExplicitGC\n-XX:+AlwaysPreTouch\n-XX:G1NewSizePercent=30\n-XX:G1MaxNewSizePercent=40\n-XX:G1HeapRegionSize=16M\n-XX:G1ReservePercent=20\n-XX:G1HeapWastePercent=5\n-XX:G1MixedGCCountTarget=4\n-XX:InitiatingHeapOccupancyPercent=15\n-XX:G1MixedGCLiveThresholdPercent=90\n-XX:G1RSetUpdatingPauseTimePercent=5\n-XX:SurvivorRatio=32\n-XX:+PerfDisableSharedMem\n-XX:MaxTenuringThreshold=1')
+    } else if (presetKey === 'aikar') {
       setJvmArgs('# Aikar\'s Flags — Tối ưu triệt để G1GC, giảm micro-stutter\n-XX:+UseG1GC\n-XX:+ParallelRefProcEnabled\n-XX:MaxGCPauseMillis=200\n-XX:+UnlockExperimentalVMOptions\n-XX:+DisableExplicitGC\n-XX:+AlwaysPreTouch\n-XX:G1NewSizePercent=30\n-XX:G1MaxNewSizePercent=40\n-XX:G1HeapRegionSize=8M\n-XX:G1ReservePercent=20\n-XX:G1HeapWastePercent=5\n-XX:G1MixedGCCountTarget=4\n-XX:InitiatingHeapOccupancyPercent=15\n-XX:G1MixedGCLiveThresholdPercent=90\n-XX:G1RSetUpdatingPauseTimePercent=5\n-XX:SurvivorRatio=32\n-XX:+PerfDisableSharedMem\n-XX:MaxTenuringThreshold=1')
     } else if (presetKey === 'zgc') {
       setJvmArgs('# Generational ZGC — Độ trễ siêu thấp (< 1ms), mượt mà tối đa (Yêu cầu Java 21+)\n-XX:+UseZGC\n-XX:+ZGenerational\n-XX:+UnlockExperimentalVMOptions\n-XX:+AlwaysPreTouch')
@@ -1123,22 +1125,59 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
       const stats = await window.electronAPI?.getSystemStats?.()
       const totalMem = stats?.totalMemGb || 8
       let optRam = 4
-      if (totalMem >= 24) optRam = 8
-      else if (totalMem >= 12) optRam = 6
-      else if (totalMem >= 8) optRam = 4
+      if (totalMem >= 24) optRam = 10
+      else if (totalMem >= 14) optRam = 8
+      else if (totalMem >= 10) optRam = 6
+      else if (totalMem >= 8) optRam = 5
       else optRam = 3
 
       setRam(optRam)
 
       const gv = profile.gameVersion || '1.20.1'
       const isModernJava = gv.startsWith('1.21') || gv.startsWith('1.20.5') || gv.startsWith('1.20.6')
-      const chosenPreset = isModernJava ? 'zgc' : 'aikar'
+      const isModded = profile.loader && profile.loader !== 'vanilla'
+      const chosenPreset = isModernJava ? 'zgc' : (isModded && optRam >= 6 ? 'modpack' : 'aikar')
       handleApplyPreset(chosenPreset)
+
+      // Auto-tune in-game options.txt to eliminate frame pacing stutter
+      if (window.electronAPI?.optimizeGameOptions) {
+        await window.electronAPI.optimizeGameOptions(profile.id)
+      }
+
+      const optimalArgs = chosenPreset === 'modpack'
+        ? '# Siêu Modpack (100+ Mods) — Tối ưu triệt để G1GC Heap Region 16MB, chống khựng hình khi load thế giới\n-XX:+UseG1GC\n-XX:+ParallelRefProcEnabled\n-XX:MaxGCPauseMillis=200\n-XX:+UnlockExperimentalVMOptions\n-XX:+DisableExplicitGC\n-XX:+AlwaysPreTouch\n-XX:G1NewSizePercent=30\n-XX:G1MaxNewSizePercent=40\n-XX:G1HeapRegionSize=16M\n-XX:G1ReservePercent=20\n-XX:G1HeapWastePercent=5\n-XX:G1MixedGCCountTarget=4\n-XX:InitiatingHeapOccupancyPercent=15\n-XX:G1MixedGCLiveThresholdPercent=90\n-XX:G1RSetUpdatingPauseTimePercent=5\n-XX:SurvivorRatio=32\n-XX:+PerfDisableSharedMem\n-XX:MaxTenuringThreshold=1'
+        : (chosenPreset === 'zgc'
+          ? '# Generational ZGC — Độ trễ siêu thấp (< 1ms), mượt mà tối đa (Yêu cầu Java 21+)\n-XX:+UseZGC\n-XX:+ZGenerational\n-XX:+UnlockExperimentalVMOptions\n-XX:+AlwaysPreTouch'
+          : '# Aikar\'s Flags — Tối ưu triệt để G1GC, giảm micro-stutter\n-XX:+UseG1GC\n-XX:+ParallelRefProcEnabled\n-XX:MaxGCPauseMillis=200\n-XX:+UnlockExperimentalVMOptions\n-XX:+DisableExplicitGC\n-XX:+AlwaysPreTouch\n-XX:G1NewSizePercent=30\n-XX:G1MaxNewSizePercent=40\n-XX:G1HeapRegionSize=8M\n-XX:G1ReservePercent=20\n-XX:G1HeapWastePercent=5\n-XX:G1MixedGCCountTarget=4\n-XX:InitiatingHeapOccupancyPercent=15\n-XX:G1MixedGCLiveThresholdPercent=90\n-XX:G1RSetUpdatingPauseTimePercent=5\n-XX:SurvivorRatio=32\n-XX:+PerfDisableSharedMem\n-XX:MaxTenuringThreshold=1')
+
+      // Save directly so user gets instantaneous full optimization
+      await window.electronAPI.updateProfile(profile.id, {
+        ramGb: optRam,
+        jvmPreset: chosenPreset,
+        jvmArgs: optimalArgs
+      })
+      await reload?.()
 
       toast.push({
         type: 'success',
-        message: `Đã tự động tối ưu: Phân bổ ${optRam}GB RAM & bật cờ ${chosenPreset.toUpperCase()}!`
+        message: `Đã tự động tối ưu: Phân bổ ${optRam}GB RAM, bật cờ ${chosenPreset.toUpperCase()} & áp dụng đồ họa chống giật!`
       })
+    } catch (err) {
+      toast.push({ type: 'error', message: err.message })
+    }
+  }
+
+  const handleOptimizeGameOptions = async () => {
+    try {
+      const res = await window.electronAPI?.optimizeGameOptions?.(profile.id)
+      if (res?.error) {
+        toast.push({ type: 'error', message: res.error })
+      } else {
+        toast.push({
+          type: 'success',
+          message: 'Đã tối ưu options.txt: Tắt VSync, hạ Simulation Distance, tắt Entity Shadows và bật Fast Graphics!'
+        })
+      }
     } catch (err) {
       toast.push({ type: 'error', message: err.message })
     }
@@ -1680,13 +1719,14 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
                 </Button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
                 {[
-                  { key: 'aikar', label: 'Aikar\'s Flags', tag: 'G1GC Khuyên Dùng' },
+                  { key: 'modpack', label: 'Siêu Modpack', tag: '100+ Mods Chống Giật' },
+                  { key: 'aikar', label: 'Aikar\'s Flags', tag: 'G1GC Chuẩn' },
                   { key: 'zgc', label: 'ZGC Latency', tag: 'Java 21+ Siêu Mượt' },
-                  { key: 'shenandoah', label: 'Shenandoah', tag: 'Modpack Nặng' },
+                  { key: 'shenandoah', label: 'Shenandoah', tag: 'Nhiều RAM' },
                   { key: 'potato', label: 'Potato PC', tag: 'Tiết kiệm RAM' },
-                  { key: 'default', label: 'Mặc định', tag: 'Chuẩn' },
+                  { key: 'default', label: 'Mặc định', tag: 'Không cờ' },
                 ].map((p) => {
                   const active = jvmPreset === p.key
                   return (
@@ -1770,7 +1810,16 @@ function ProfileDetailView({ profile, onBack, navigate, onPlay, reload }) {
                 <span>Mở ở chế độ Toàn màn hình (Fullscreen)</span>
               </label>
 
-              <div className="pt-3 border-t border-line flex justify-end">
+              <div className="pt-3 border-t border-line flex items-center justify-between gap-3 flex-wrap">
+                <Button
+                  variant="secondary"
+                  onClick={handleOptimizeGameOptions}
+                  className="gap-1.5 border-accent/40 text-accent hover:bg-accent/10"
+                  title="Tự động tắt VSync, hạ khoảng cách mô phỏng xuống 6 chunks và tắt bóng thực thể để triệt tiêu khựng hình"
+                >
+                  <Sliders size={14} weight="bold" />
+                  Tối Ưu Game Options (options.txt)
+                </Button>
                 <Button
                   variant="primary"
                   loading={savingJvm}

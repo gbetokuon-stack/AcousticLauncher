@@ -15,12 +15,32 @@ import { useToast } from '../../hooks/useToast.jsx'
 // Definitive Minecraft Performance Optimization Mods
 const OPTIMIZER_MODS_DATABASE = [
   {
+    id: 'fabric-api',
+    name: 'Fabric API',
+    description: 'Thư viện nền tảng bắt buộc để các mod tối ưu (Sodium, Lithium, ...) hoạt động.',
+    loaders: ['fabric'],
+    slugModrinth: 'fabric-api',
+    cfModId: 306612,
+    category: 'core',
+    recommended: true
+  },
+  {
     id: 'sodium',
     name: 'Sodium',
     description: 'Thay thế engine render của Minecraft, tăng FPS gấp 2 - 5 lần cực kỳ mượt mà.',
     loaders: ['fabric', 'neoforge'],
     slugModrinth: 'sodium',
     cfModId: 394468,
+    category: 'rendering',
+    recommended: true
+  },
+  {
+    id: 'indium',
+    name: 'Indium',
+    description: 'Triển khai Fabric Rendering API cho Sodium, tránh xung đột và giật lag với các mod block 3D.',
+    loaders: ['fabric'],
+    slugModrinth: 'indium',
+    cfModId: 577422,
     category: 'rendering',
     recommended: true
   },
@@ -81,6 +101,46 @@ const OPTIMIZER_MODS_DATABASE = [
     loaders: ['fabric', 'forge', 'neoforge'],
     slugModrinth: 'entityculling',
     cfModId: 448233,
+    category: 'rendering',
+    recommended: true
+  },
+  {
+    id: 'krypton',
+    name: 'Krypton',
+    description: 'Tối ưu hóa network stack, giảm nghẽn packet và giật lag khi tải chunk.',
+    loaders: ['fabric', 'forge', 'neoforge'],
+    slugModrinth: 'krypton',
+    cfModId: 531398,
+    category: 'cpu',
+    recommended: true
+  },
+  {
+    id: 'badoptimizations',
+    name: 'BadOptimizations',
+    description: 'Loại bỏ các phép tính thừa (ánh sáng bầu trời, bảng điểm), tăng độ mượt mà tối đa.',
+    loaders: ['fabric', 'forge', 'neoforge'],
+    slugModrinth: 'badoptimizations',
+    cfModId: 970619,
+    category: 'engine',
+    recommended: true
+  },
+  {
+    id: 'memoryleakfix',
+    name: 'Memory Leak Fix',
+    description: 'Sửa triệt để rò rỉ RAM bộ nhớ, ngăn chặn game càng chơi lâu càng bị giật hình.',
+    loaders: ['fabric', 'forge', 'neoforge'],
+    slugModrinth: 'memoryleakfix',
+    cfModId: 627566,
+    category: 'ram',
+    recommended: true
+  },
+  {
+    id: 'culllessleaves',
+    name: 'Cull Less Leaves',
+    description: 'Cắt giảm render các mặt lá cây bị che khuất, tăng vọt FPS ở rừng cây rậm rạp.',
+    loaders: ['fabric', 'forge', 'neoforge'],
+    slugModrinth: 'cull-less-leaves',
+    cfModId: 575210,
     category: 'rendering',
     recommended: true
   }
@@ -199,9 +259,35 @@ export default function OptimizerModal({
       }
 
       if (successCount > 0) {
+        // Automatically check and resolve any missing secondary dependencies (e.g. cloth-config)
+        if (window.electronAPI?.checkMissingMods) {
+          try {
+            setInstallProgress('Đang tự động kiểm tra thư viện phụ thuộc còn thiếu...')
+            const missing = await window.electronAPI.checkMissingMods(profile.id)
+            if (missing?.missing && missing.missing.length > 0) {
+              const missingPayload = missing.missing.map(m => ({
+                platform: m.platform,
+                modId: m.modId,
+                versionId: m.versionId,
+                projectType: 'mod'
+              }))
+              await window.electronAPI.installBatchMods(profile.id, missingPayload)
+            }
+          } catch (depErr) {
+            console.warn('Dependency check warning:', depErr)
+          }
+        }
+
+        // Auto-tune game options
+        if (window.electronAPI?.optimizeGameOptions) {
+          try {
+            await window.electronAPI.optimizeGameOptions(profile.id)
+          } catch {}
+        }
+
         toast.push({
           type: 'success',
-          message: `Đã cài đặt thành công ${successCount} mod tối ưu hóa!`
+          message: `Đã cài đặt thành công ${successCount} mod tối ưu hóa và cấu hình game siêu mượt!`
         })
         if (onInstalled) onInstalled()
         onClose()

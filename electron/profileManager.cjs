@@ -426,6 +426,59 @@ function register({ ipcMain, files, readJson, atomicWriteJson }) {
       return []
     }
   })
+
+  ipcMain.handle('profiles:optimizeGameOptions', async (_e, id) => {
+    if (!isUuid(id)) return { error: 'Invalid profile ID' }
+    const data = readProfiles(PROFILES_FILE)
+    const profile = data.profiles.find((p) => p.id === id)
+    if (!profile) return { error: 'Profile không tồn tại' }
+
+    try {
+      const optionsFile = path.join(profile.instancePath, 'options.txt')
+      let lines = []
+      if (fs.existsSync(optionsFile)) {
+        lines = fs.readFileSync(optionsFile, 'utf-8').split(/\r?\n/)
+      }
+
+      // Zero-Stutter high performance Minecraft options
+      const optimalSettings = {
+        'enableVsync': 'false',
+        'maxFps': '260',
+        'entityShadows': 'false',
+        'biomeBlendRadius': '1',
+        'simulationDistance': '6',
+        'renderClouds': '"false"',
+        'graphicsMode': '0',
+        'particles': '1',
+        'renderDistance': '10',
+        'mipmapLevels': '2',
+      }
+
+      const existingKeys = new Set()
+      const updatedLines = lines.map(line => {
+        const colonIdx = line.indexOf(':')
+        if (colonIdx > 0) {
+          const key = line.slice(0, colonIdx).trim()
+          if (key in optimalSettings) {
+            existingKeys.add(key)
+            return `${key}:${optimalSettings[key]}`
+          }
+        }
+        return line
+      })
+
+      for (const [k, v] of Object.entries(optimalSettings)) {
+        if (!existingKeys.has(k)) {
+          updatedLines.push(`${k}:${v}`)
+        }
+      }
+
+      fs.writeFileSync(optionsFile, updatedLines.join('\n'), 'utf-8')
+      return { success: true, settings: optimalSettings }
+    } catch (err) {
+      return { error: err.message }
+    }
+  })
 }
 
 module.exports = { register }

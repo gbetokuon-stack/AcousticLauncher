@@ -377,6 +377,23 @@ function ensureQuotedWindowsPath(p) {
   return /\s/.test(p) ? `"${p}"` : p
 }
 
+function configureHighPerformanceGpu(javaExePath) {
+  if (process.platform !== 'win32' || !javaExePath) return
+  try {
+    const { execSync } = require('child_process')
+    const javawPath = javaExePath.replace(/java\.exe$/i, 'javaw.exe')
+    const pathsToRegister = [javaExePath, javawPath].filter((p, i, a) => a.indexOf(p) === i && fs.existsSync(p))
+    for (const p of pathsToRegister) {
+      execSync(`reg add "HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences" /v "${p}" /t REG_SZ /d "GpuPreference=2;" /f`, {
+        stdio: 'ignore',
+        timeout: 2500
+      })
+    }
+  } catch (err) {
+    console.warn('[GPU Preference] failed to set registry:', err?.message)
+  }
+}
+
 /**
  * Build JVM + mainClass + game args.
  *
@@ -388,7 +405,7 @@ function ensureQuotedWindowsPath(p) {
 function buildLaunchArgs(spec, profile, settings) {
   const ram = profile.ramGb || settings.ramGb || 4
   const ramMb  = Math.max(512, Math.floor(ram * 1024))
-  const xmsMb  = Math.max(512, Math.min(Math.floor(ramMb / 2), 2048))
+  const xmsMb  = Math.max(512, Math.min(Math.floor(ramMb / 2), 4096))
   const javaMajor = spec.javaMajor || 17
 
   // Parse profile-level JVM arguments. Each line becomes a separate argv
@@ -396,19 +413,24 @@ function buildLaunchArgs(spec, profile, settings) {
   const customJvmArgs = parseJvmArgsString(profile.jvmArgs)
 
   const nativesDir = spec.versionJson?.nativesDirectory || path.join(profile.instancePath, 'natives')
-  const perfCores  = detectPerformanceCores()
-  const coreJvmArgs = perfCores.length > 0
-    ? [`-XX:ActiveProcessorCount=${perfCores.length}`]
-    : []
 
-  const baseArgs = [
-    // Memory — use MB so the OS can give back a precise slice.
-    `-Xmx${ramMb}m`,
-    `-Xms${xmsMb}m`,
+  const hasCustomGc = customJvmArgs.some(a =>
+    a.includes('+UseZGC') ||
+    a.includes('+UseShenandoahGC') ||
+    a.includes('+UseSerialGC') ||
+    a.includes('+UseParallelGC') ||
+    a.includes('+UseG1GC')
+  )
+  const hasCustomXmx = customJvmArgs.some(a => a.startsWith('-Xmx'))
+  const hasCustomXms = customJvmArgs.some(a => a.startsWith('-Xms'))
 
-    // GC — Aikar's flags are the de-facto standard for modern Minecraft.
-    // G1 is a hard requirement in modern MC anyway, but the tuning flags
-    // cut pause times from ~50ms to ~5–10ms on a typical rig.
+  const memArgs = []
+  if (!hasCustomXmx) memArgs.push(`-Xmx${ramMb}m`)
+  if (!hasCustomXms) memArgs.push(`-Xms${xmsMb}m`)
+
+  // G1HeapRegionSize: 16M for 6GB+, 32M for 12GB+ prevents humongous allocation fragmentation pauses
+  const g1RegionSize = ramMb >= 12288 ? '32M' : (ramMb >= 6144 ? '16M' : (ramMb >= 3072 ? '8M' : '4M'))
+  const gcArgs = hasCustomGc ? [] : [
     '-XX:+UseG1GC',
     '-XX:+ParallelRefProcEnabled',
     '-XX:MaxGCPauseMillis=200',
@@ -417,7 +439,7 @@ function buildLaunchArgs(spec, profile, settings) {
     '-XX:+AlwaysPreTouch',
     '-XX:G1NewSizePercent=30',
     '-XX:G1MaxNewSizePercent=40',
-    '-XX:G1HeapRegionSize=8M',
+    `-XX:G1HeapRegionSize=${g1RegionSize}`,
     '-XX:G1ReservePercent=20',
     '-XX:G1HeapWastePercent=5',
     '-XX:G1MixedGCCountTarget=4',
@@ -431,6 +453,11 @@ function buildLaunchArgs(spec, profile, settings) {
       '-XX:G1NewSizePercent=40',
       '-XX:G1MaxNewSizePercent=50',
     ] : []),
+  ]
+
+  const baseArgs = [
+    ...memArgs,
+    ...gcArgs,
     ...(javaMajor >= 16 ? [
       '--add-opens=java.base/java.lang=ALL-UNNAMED',
       '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED',
@@ -447,10 +474,6 @@ function buildLaunchArgs(spec, profile, settings) {
       '--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED',
       '--add-opens=java.base/jdk.internal.loader=ALL-UNNAMED',
     ] : []),
-
-    // Pin to physical (P-core) CPUs on hybrid CPUs — halves frame times
-    // when the game thread gets moved off an E-core by the scheduler.
-    ...coreJvmArgs,
 
     // LWJGL tuning — every flag is "free" perf, no behavioural change.
     `-Dorg.lwjgl.library.path=${nativesDir}`,
@@ -959,12 +982,45 @@ async function startSpawn(profile, paths, { getMainWindow, account, mcToken, set
   sendLog({ level: 'INFO', msg: `Classpath (${cpSummary})` })
   sendState({ phase: 'launching' })
 
+  // Ensure Windows DirectX Graphics Settings prioritizes High-Performance Discrete GPU for Java
+  configureHighPerformanceGpu(java.exe)
+
   try {
+    const gpuEnv = {
+      ...process.env,
+      // NVIDIA Discrete High-Performance GPU
+      __NV_PRIME_RENDER_OFFLOAD: '1',
+      __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
+      CUDA_DEVICE_ORDER: 'PCI_BUS_ID',
+      // AMD Discrete High-Performance GPU
+      DRI_PRIME: '1',
+      GPU_MAX_ALLOC_PERCENT: '100',
+      GPU_USE_SYNC_OBJECTS: '1',
+      GPU_SINGLE_ALLOC_PERCENT: '100',
+      GPU_MAX_HEAP_SIZE: '100',
+      GPU_FORCE_64BIT_PTR: '1',
+      // Disable Windows OpenGL compat shim that causes micro-stutters
+      SHIM_MCCOMPAT: '0',
+    }
+
     activeProc = spawn(java.exe, args, {
       cwd: profile.instancePath,
-      env: process.env,
+      env: gpuEnv,
       windowsHide: true,
     })
+
+    // Boost process priority to prevent background OS tasks from causing frame drops
+    if (activeProc && activeProc.pid) {
+      try {
+        if (process.platform === 'win32') {
+          os.setPriority(activeProc.pid, os.constants.priority.PRIORITY_HIGH)
+        } else {
+          os.setPriority(activeProc.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL)
+        }
+      } catch (pErr) {
+        // Fallback or ignore if elevation restricted
+      }
+    }
 
     // Tell the UI the game process is now alive. The renderer shows the
     // "running" state and starts its elapsed-time ticker. If the spawn
