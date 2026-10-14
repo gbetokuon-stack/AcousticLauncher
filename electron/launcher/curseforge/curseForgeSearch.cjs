@@ -192,8 +192,156 @@ async function getCategories(projectType = 'mod') {
   }))
 }
 
+function downloadUrlToFile(url, destPath, tmpPath, expectedSize, onProgress, filename) {
+  return new Promise((resolve, reject) => {
+    const MAX_REDIRECTS = 10
+    let settled = false
+    function done(err) {
+      if (settled) return
+      settled = true
+      if (err) reject(err)
+      else resolve()
+    }
+
+    function doGet(reqUrl, hops = 0) {
+      if (hops > MAX_REDIRECTS) return done(new Error('Too many redirects'))
+      const client = reqUrl.startsWith('https') ? https : http
+      const req = client.get(reqUrl, { headers: { 'User-Agent': UA }, timeout: 60000 }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume()
+          let nextUrl = res.headers.location
+          if (!nextUrl.startsWith('http')) {
+            try { nextUrl = new URL(nextUrl, reqUrl).href } catch {}
+          }
+          return doGet(nextUrl, hops + 1)
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          const err = new Error(`HTTP ${res.statusCode}`)
+          err.statusCode = res.statusCode
+          return done(err)
+        }
+
+        const total = parseInt(res.headers['content-length'] || String(expectedSize || 0), 10)
+        let received = 0
+        const startTime = Date.now()
+        const out = fs.createWriteStream(tmpPath)
+
+        res.on('data', chunk => {
+          received += chunk.length
+          if (total > 0 && onProgress) {
+            const pct = Math.round(received / total * 100)
+            const elapsed = (Date.now() - startTime) / 1000
+            const speed = elapsed > 0 ? Math.round(received / elapsed / 1024) : 0
+            onProgress({ log: `Đang tải ${filename}: ${pct}%`, percent: pct, total, received, speed })
+          }
+        })
+        res.pipe(out)
+        out.on('finish', () => {
+          try {
+            fs.renameSync(tmpPath, destPath)
+          } catch {
+            try {
+              fs.copyFileSync(tmpPath, destPath)
+              fs.unlinkSync(tmpPath)
+            } catch {}
+          }
+          done()
+        })
+        out.on('error', err => {
+          try { fs.unlinkSync(tmpPath) } catch {}
+          done(err)
+        })
+        res.on('error', err => {
+          try { fs.unlinkSync(tmpPath) } catch {}
+          done(err)
+        })
+      })
+      req.on('error', err => done(err))
+      req.on('timeout', () => {
+        req.destroy()
+        done(new Error('Download timeout'))
+      })
+    }
+    doGet(url, 0)
+  })
+}
+
+async function searchModOnModrinth(modName, gameVersion, loader) {
+  try {
+    const params = new URLSearchParams()
+    params.append('query', modName)
+    params.append('limit', '5')
+    params.append('facets', JSON.stringify([
+      ['project_type:mod'],
+      ...(gameVersion ? [['versions:' + gameVersion]] : []),
+      ...(loader ? [['categories:' + loader]] : [])
+    ]))
+
+    const url = `https://api.modrinth.com/v2/search?${params.toString()}`
+    return new Promise((resolve) => {
+      const req = https.get(url, {
+        headers: { 'User-Agent': 'AcousticForge/1.0', 'Accept': 'application/json' },
+        timeout: 10000
+      }, (res) => {
+        if (res.statusCode !== 200) { res.resume(); return resolve(null) }
+        let data = ''
+        res.on('data', c => data += c)
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data)
+            if (parsed.hits && parsed.hits.length > 0) {
+              resolve(parsed.hits[0])
+            } else {
+              resolve(null)
+            }
+          } catch { resolve(null) }
+        })
+      })
+      req.on('error', () => resolve(null))
+      req.on('timeout', () => { req.destroy(); resolve(null) })
+    })
+  } catch {
+    return null
+  }
+}
+
+async function getModrinthDownloadUrl(slug, gameVersion, loader) {
+  try {
+    let facets = `[["project_type:mod"]]`
+    const params = new URLSearchParams()
+    if (gameVersion) params.append('game_versions', JSON.stringify([gameVersion]))
+    if (loader) params.append('loaders', JSON.stringify([loader]))
+
+    const url = `https://api.modrinth.com/v2/project/${slug}/version?${params.toString()}`
+    return new Promise((resolve) => {
+      const req = https.get(url, {
+        headers: { 'User-Agent': 'AcousticForge/1.0', 'Accept': 'application/json' },
+        timeout: 10000
+      }, (res) => {
+        if (res.statusCode !== 200) { res.resume(); return resolve(null) }
+        let data = ''
+        res.on('data', c => data += c)
+        res.on('end', () => {
+          try {
+            const versions = JSON.parse(data)
+            if (Array.isArray(versions) && versions.length > 0) {
+              const ver = versions[0]
+              const file = ver.files?.find(f => f.primary) || ver.files?.[0]
+              resolve(file?.url || null)
+            } else { resolve(null) }
+          } catch { resolve(null) }
+        })
+      })
+      req.on('error', () => resolve(null))
+      req.on('timeout', () => { req.destroy(); resolve(null) })
+    })
+  } catch { return null }
+}
+
 async function installVersion(opts, onProgress) {
   const { versionId, projectId, projectType, instancePath } = opts
+  const progressCb = onProgress || opts.onProgress
 
   let file = null
   if (projectId) {
@@ -205,13 +353,7 @@ async function installVersion(opts, onProgress) {
   }
   if (!file) throw new Error('File not found')
 
-  let downloadUrl = file.downloadUrl
   const filename = file.fileName
-
-  if (!downloadUrl && file.id && filename) {
-    downloadUrl = `https://edge.forgecdn.net/files/${Math.floor(file.id / 1000)}/${file.id % 1000}/${encodeURIComponent(filename)}`
-  }
-
   const folderMap = {
     mod: 'mods',
     shader: 'shaderpacks',
@@ -224,94 +366,84 @@ async function installVersion(opts, onProgress) {
   const destPath = path.join(destDir, filename)
   const tmpPath = destPath + '.tmp'
 
-  if (!downloadUrl) {
+  // Build list of candidate download URLs to try
+  const candidateUrls = []
+
+  // Strategy 1: Official API URL
+  if (file.downloadUrl) {
+    candidateUrls.push(file.downloadUrl)
+  }
+
+  // Strategy 2-4: Multiple CDN patterns  
+  if (file.id && filename) {
+    const id1 = Math.floor(file.id / 1000)
+    const id2 = file.id % 1000
+    const encodedName = encodeURIComponent(filename)
+    candidateUrls.push(`https://edge.forgecdn.net/files/${id1}/${id2}/${encodedName}`)
+    candidateUrls.push(`https://mediafilez.forgecdn.net/files/${id1}/${id2}/${encodedName}`)
+    candidateUrls.push(`https://media.forgecdn.net/files/${id1}/${id2}/${encodedName}`)
+  }
+
+  // Strategy 5: CurseForge website download API (works for most blocked mods)
+  const actualProjectId = projectId || file.modId
+  if (actualProjectId && file.id) {
+    candidateUrls.push(`https://www.curseforge.com/api/v1/mods/${actualProjectId}/files/${file.id}/download`)
+  }
+
+  const uniqueUrls = [...new Set(candidateUrls.filter(Boolean))]
+
+  if (progressCb) progressCb({ log: `Bắt đầu tải ${filename}...`, percent: 0, total: file.fileLength || 0 })
+
+  let downloaded = false
+
+  for (const tryUrl of uniqueUrls) {
+    try {
+      await downloadUrlToFile(tryUrl, destPath, tmpPath, file.fileLength, progressCb, filename)
+      downloaded = true
+      break
+    } catch {
+      try { fs.unlinkSync(tmpPath) } catch {}
+    }
+  }
+
+  // Strategy 6: Modrinth cross-lookup fallback
+  if (!downloaded) {
+    try {
+      const rawName = file.displayName || filename || ''
+      const searchName = rawName.replace(/[-_]\d+\.\d+.*$/, '').replace(/[^a-zA-Z0-9 ]/g, ' ').trim() || rawName
+      const gameVersion = opts.gameVersion || (file.gameVersions?.find(v => /^1\.\d+/.test(v)))
+      const loader = opts.loader || (file.gameVersions?.find(v => ['forge', 'fabric', 'quilt', 'neoforge'].includes(v.toLowerCase()))?.toLowerCase())
+
+      if (progressCb) progressCb({ log: `Tìm trên Modrinth: ${searchName}...`, percent: 0 })
+      const hit = await searchModOnModrinth(searchName, gameVersion, loader)
+      if (hit && (hit.project_id || hit.slug)) {
+        const mrUrl = await getModrinthDownloadUrl(hit.project_id || hit.slug, gameVersion, loader)
+        if (mrUrl) {
+          if (progressCb) progressCb({ log: `Đang tải từ Modrinth: ${filename}...`, percent: 0 })
+          await downloadUrlToFile(mrUrl, destPath, tmpPath, file.fileLength, progressCb, filename)
+          downloaded = true
+        }
+      }
+    } catch {
+      try { fs.unlinkSync(tmpPath) } catch {}
+    }
+  }
+
+  if (!downloaded) {
     return {
       success: false,
       needsManualDownload: true,
       platform: 'curseforge',
-      modId: projectId,
+      modId: actualProjectId,
       versionId: file.id,
       fileName: filename,
       name: file.displayName || filename,
-      browserUrl: `https://www.curseforge.com/projects/${projectId}/files/${file.id}`
+      browserUrl: `https://www.curseforge.com/projects/${actualProjectId}/files/${file.id}`
     }
   }
 
-  if (onProgress) onProgress({ log: `Bắt đầu tải ${filename}...`, percent: 0, total: file.fileLength })
-
-  try {
-    await new Promise((resolve, reject) => {
-      const MAX_REDIRECTS = 10
-      function doGet(url, hops = 0) {
-        if (hops > MAX_REDIRECTS) return reject(new Error('Too many redirects'))
-        const client = url.startsWith('https') ? https : http
-        const req = client.get(url, { headers: { 'User-Agent': UA }, timeout: 60000 }, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            res.resume()
-            let nextUrl = res.headers.location
-            if (!nextUrl.startsWith('http')) {
-              try { nextUrl = new URL(nextUrl, url).href } catch {}
-            }
-            return doGet(nextUrl, hops + 1)
-          }
-          if (res.statusCode === 403 || res.statusCode === 404) {
-            res.resume()
-            const err = new Error(`HTTP ${res.statusCode}`)
-            err.statusCode = res.statusCode
-            return reject(err)
-          }
-          if (res.statusCode !== 200) {
-            res.resume()
-            return reject(new Error(`HTTP ${res.statusCode}`))
-          }
-          const total = parseInt(res.headers['content-length'] || String(file.fileLength || 0), 10)
-          let received = 0
-          const startTime = Date.now()
-          const out = fs.createWriteStream(tmpPath)
-
-          res.on('data', chunk => {
-            received += chunk.length
-            if (total > 0 && onProgress) {
-              const pct = Math.round(received / total * 100)
-              const elapsed = (Date.now() - startTime) / 1000
-              const speed = elapsed > 0 ? Math.round(received / elapsed / 1024) : 0
-              onProgress({ log: `Đang tải ${filename}: ${pct}%`, percent: pct, total, received, speed })
-            }
-          })
-          res.pipe(out)
-          out.on('finish', () => {
-            try { fs.renameSync(tmpPath, destPath) } catch {
-              try { fs.copyFileSync(tmpPath, destPath); fs.unlinkSync(tmpPath) } catch {}
-            }
-            resolve()
-          })
-          out.on('error', err => { try { fs.unlinkSync(tmpPath) } catch {}; reject(err) })
-          res.on('error', err => { try { fs.unlinkSync(tmpPath) } catch {}; reject(err) })
-        })
-        req.on('error', reject)
-        req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')) })
-      }
-      doGet(downloadUrl, 0)
-    })
-
-    if (onProgress) onProgress({ log: `Đã cài đặt ${filename}`, percent: 100 })
-    return { success: true, file: filename, path: destPath }
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath) } catch {}
-    if (err.statusCode === 403 || err.statusCode === 404 || err.message.includes('403')) {
-      return {
-        success: false,
-        needsManualDownload: true,
-        platform: 'curseforge',
-        modId: projectId,
-        versionId: file.id,
-        fileName: filename,
-        name: file.displayName || filename,
-        browserUrl: `https://www.curseforge.com/projects/${projectId}/files/${file.id}`
-      }
-    }
-    throw err
-  }
+  if (progressCb) progressCb({ log: `Đã cài đặt ${filename}`, percent: 100 })
+  return { success: true, file: filename, path: destPath }
 }
 
 module.exports = {
@@ -320,5 +452,7 @@ module.exports = {
   getProjectVersions,
   getFile,
   getCategories,
-  installVersion
+  installVersion,
+  searchModOnModrinth,
+  getModrinthDownloadUrl
 }

@@ -200,7 +200,7 @@ export default function ManualDownloadModal({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-fg">
-                  Tải mod qua trình duyệt (như Prism Launcher)
+                  Tải mod bổ sung từ CurseForge
                 </h3>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-500/20 text-orange-300 border border-orange-500/30">
                   CurseForge Protection

@@ -310,15 +310,11 @@ async function resolveCurseForgeDeps(modId, fileId, installedInfo, gameVersion, 
         edgeUrl = `https://edge.forgecdn.net/files/${Math.floor(compFile.id / 1000)}/${compFile.id % 1000}/${encodeURIComponent(fileName)}`
       }
 
-      let reachable = false
-      if (downloadUrl) {
-        reachable = true
-      } else if (edgeUrl) {
-        reachable = await checkUrlReachable(edgeUrl)
-        if (reachable) downloadUrl = edgeUrl
+      if (!downloadUrl && edgeUrl) {
+        downloadUrl = edgeUrl
       }
 
-      const needsManualDownload = !reachable
+      const needsManualDownload = !downloadUrl && !compFile.id
       const browserUrl = slug
         ? `https://www.curseforge.com/minecraft/mc-mods/${slug}/download/${compFile.id}`
         : `https://www.curseforge.com/projects/${depModId}/files/${compFile.id}`
@@ -332,7 +328,7 @@ async function resolveCurseForgeDeps(modId, fileId, installedInfo, gameVersion, 
         icon,
         fileName,
         fileSize: fileLength,
-        downloadUrl: reachable ? downloadUrl : null,
+        downloadUrl: downloadUrl || null,
         needsManualDownload,
         browserUrl
       })
@@ -422,15 +418,11 @@ async function checkModDependencies(opts) {
       edgeUrl = `https://edge.forgecdn.net/files/${Math.floor(file.id / 1000)}/${file.id % 1000}/${encodeURIComponent(fileName)}`
     }
 
-    let reachable = false
-    if (downloadUrl) {
-      reachable = true
-    } else if (edgeUrl) {
-      reachable = await checkUrlReachable(edgeUrl)
-      if (reachable) downloadUrl = edgeUrl
+    if (!downloadUrl && edgeUrl) {
+      downloadUrl = edgeUrl
     }
 
-    const needsManualDownload = !reachable
+    const needsManualDownload = !downloadUrl && !file?.id
     const browserUrl = proj?.slug
       ? `https://www.curseforge.com/minecraft/mc-mods/${proj.slug}/download/${versionId}`
       : `https://www.curseforge.com/projects/${modId}/files/${versionId}`
@@ -444,7 +436,7 @@ async function checkModDependencies(opts) {
       icon: proj?.icon_url || '',
       fileName,
       fileSize: file?.fileLength || 0,
-      downloadUrl: reachable ? downloadUrl : null,
+      downloadUrl: downloadUrl || null,
       needsManualDownload,
       browserUrl
     }

@@ -137,7 +137,7 @@ const api = {
   checkModDependencies: (opts) => ipcRenderer.invoke('mod:checkDependencies', opts),
   installBatchMods:     (opts) => ipcRenderer.invoke('mod:installBatch', opts),
 
-  // browser download manager (PrismLauncher-style)
+  // browser download manager
   startBrowserDownloadWatcher: (opts) => ipcRenderer.invoke('browserDownload:start', opts),
   stopBrowserDownloadWatcher:  () => ipcRenderer.invoke('browserDownload:stop'),
   openBrowserDownloadUrl:      (url) => ipcRenderer.invoke('browserDownload:openUrl', url),

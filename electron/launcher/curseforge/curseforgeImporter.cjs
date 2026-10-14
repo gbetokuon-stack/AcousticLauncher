@@ -225,22 +225,22 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
 
     let url = await getModDownloadUrl(mod.projectID, mod.fileID, apiKey)
     let fileName = ''
+    let modName = ''
 
-    if (!url) {
-      // Try fetching file metadata for edge CDN fallback
-      try {
-        const fileInfo = await httpsGetJson(`${CF_PROXY}/mods/${mod.projectID}/files/${mod.fileID}`)
-        if (fileInfo?.data?.fileName) {
-          fileName = fileInfo.data.fileName
-          url = `https://edge.forgecdn.net/files/${Math.floor(mod.fileID / 1000)}/${mod.fileID % 1000}/${encodeURIComponent(fileName)}`
-        }
-      } catch {}
-    }
+    // Fetch file metadata for filename and CDN fallbacks
+    let fileInfo = null
+    try {
+      const fi = await httpsGetJson(`${CF_PROXY}/mods/${mod.projectID}/files/${mod.fileID}`)
+      if (fi?.data) {
+        fileInfo = fi.data
+        fileName = fi.data.fileName || ''
+        modName = fi.data.displayName || fileName
+      }
+    } catch {}
 
     if (!fileName && url) {
       fileName = url.split('/').pop().split('?')[0]
     }
-
     if (!fileName) {
       fileName = `mod-${mod.projectID}-${mod.fileID}.jar`
     }
@@ -253,15 +253,59 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
       continue
     }
 
+    // Build candidate URL list
+    const candidateUrls = []
+    if (url) candidateUrls.push(url)
+    if (fileName && mod.fileID) {
+      const id1 = Math.floor(mod.fileID / 1000)
+      const id2 = mod.fileID % 1000
+      const enc = encodeURIComponent(fileName)
+      candidateUrls.push(`https://edge.forgecdn.net/files/${id1}/${id2}/${enc}`)
+      candidateUrls.push(`https://mediafilez.forgecdn.net/files/${id1}/${id2}/${enc}`)
+      candidateUrls.push(`https://media.forgecdn.net/files/${id1}/${id2}/${enc}`)
+    }
+    // CurseForge website download API
+    candidateUrls.push(`https://www.curseforge.com/api/v1/mods/${mod.projectID}/files/${mod.fileID}/download`)
+
+    // Deduplicate
+    const uniqueUrls = [...new Set(candidateUrls)]
+
     let downloadSuccess = false
-    if (url) {
+    for (const tryUrl of uniqueUrls) {
+      if (downloadSuccess) break
       onProgress?.({ phase: 'mods', log: `[${done}/${total}] Đang tải: ${fileName}`, done, total, percent: pct })
       try {
-        await downloadFile(url, destPath)
+        await downloadFile(tryUrl, destPath)
         downloadSuccess = true
-      } catch (err) {
-        downloadSuccess = false
-      }
+      } catch {}
+    }
+
+    // Modrinth cross-lookup fallback
+    if (!downloadSuccess && modName) {
+      onProgress?.({ phase: 'mods', log: `[${done}/${total}] Tìm trên Modrinth: ${modName}`, done, total, percent: pct })
+      try {
+        const searchName = modName.replace(/[-_]\d+\.\d+.*$/, '').replace(/[^a-zA-Z0-9 ]/g, ' ').trim()
+        const mrSearch = await httpsGetJson(`https://api.modrinth.com/v2/search?query=${encodeURIComponent(searchName)}&limit=3&facets=${encodeURIComponent(JSON.stringify([["project_type:mod"]]))}`, { 'User-Agent': 'AcousticForge/1.0' })
+        if (mrSearch?.hits?.length > 0) {
+          const bestHit = mrSearch.hits[0]
+          // Get versions for this mod
+          const vParams = new URLSearchParams()
+          if (gameVersion) vParams.append('game_versions', JSON.stringify([gameVersion]))
+          const mrVersions = await httpsGetJson(`https://api.modrinth.com/v2/project/${bestHit.project_id}/version?${vParams.toString()}`, { 'User-Agent': 'AcousticForge/1.0' })
+          if (Array.isArray(mrVersions) && mrVersions.length > 0) {
+            const mrVer = mrVersions[0]
+            const mrFile = mrVer.files?.find(f => f.primary) || mrVer.files?.[0]
+            if (mrFile?.url) {
+              const mrDestPath = path.join(modsDir, mrFile.filename || fileName)
+              try {
+                await downloadFile(mrFile.url, mrDestPath)
+                downloadSuccess = true
+                onProgress?.({ phase: 'mods', log: `[${done}/${total}] Tải từ Modrinth: ${mrFile.filename}`, done, total, percent: pct })
+              } catch {}
+            }
+          }
+        }
+      } catch {}
     }
 
     if (!downloadSuccess) {
@@ -271,10 +315,10 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
         projectId: mod.projectID,
         fileId: mod.fileID,
         fileName,
-        name: fileName,
+        name: modName || fileName,
         browserUrl: `https://www.curseforge.com/projects/${mod.projectID}/files/${mod.fileID}`
       })
-      onProgress?.({ phase: 'mods', log: `[${done}/${total}] Giới hạn tải tự động (sẽ mở trình duyệt): ${fileName}`, done, total, percent: pct })
+      onProgress?.({ phase: 'mods', log: `[${done}/${total}] Không thể tải tự động: ${fileName}`, done, total, percent: pct })
     }
 
     if (done % 3 === 0) await new Promise(r => setImmediate(r))
@@ -296,7 +340,7 @@ async function importCurseForgePack(zipPath, instancePath, onProgress, apiKey) {
   })
 
   const msg = blockedMods.length > 0
-    ? `Import hoàn tất: ${name} (${blockedMods.length} mod cần mở trình duyệt tải như Prism Launcher)`
+    ? `Import hoàn tất: ${name} (${blockedMods.length} mod đang thử tải từ nguồn thay thế...)`
     : `Import hoàn tất: ${name}`
   onProgress?.({ phase: 'done', log: msg, percent: 100, blockedMods })
 

@@ -1011,7 +1011,7 @@ export function ModDetail({ projectId, projectType = 'mod', platform, onBack, se
         />
       )}
 
-      {/* PrismLauncher-style Manual Download Modal */}
+      {/* CurseForge Blocked Mod Download Modal */}
       {showManualDownloadModal && (
         <ManualDownloadModal
           isOpen={showManualDownloadModal}

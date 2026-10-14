@@ -1,6 +1,6 @@
-# AcousticForge v0.1.6 - Tự động phát hiện Mod còn thiếu, Tải qua trình duyệt PrismLauncher & Bộ Tối Ưu Hóa Game
+# AcousticForge v0.1.6 - Tự động phát hiện Mod còn thiếu, Hệ thống tải mod tự động & Bộ Tối Ưu Hóa Game
 
-Bản cập nhật **v0.1.6** mang đến bước nhảy vọt về khả năng quản lý mod và hiệu năng game: tự động giải quyết các mod phụ thuộc còn thiếu, cơ chế tải mod qua trình duyệt kèm tự động nhận diện file tải về chuẩn phong cách **Prism Launcher**, cùng bộ công cụ **Tự động Tối ưu hóa JVM & Gói Mod Tăng FPS 1-Click**.
+Bản cập nhật **v0.1.6** mang đến bước nhảy vọt về khả năng quản lý mod và hiệu năng game: tự động giải quyết các mod phụ thuộc còn thiếu, cơ chế tải mod qua trình duyệt kèm tự động nhận diện file tải về hệ thống **tự động tải mod từ nhiều nguồn**, cùng bộ công cụ **Tự động Tối ưu hóa JVM & Gói Mod Tăng FPS 1-Click**.
 
 ---
 
@@ -14,7 +14,7 @@ Bản cập nhật **v0.1.6** mang đến bước nhảy vọt về khả năng 
 - **Giao diện xác nhận trực quan (`DependencyConfirmModal`):** Hiển thị danh sách các mod còn thiếu kèm tùy chọn "Cài đặt kèm phụ thuộc" hoặc "Bỏ qua phụ thuộc".
 - **Nút "Tìm mod còn thiếu" trong Quản lý Profile:** Cho phép quét toàn bộ thư mục mod của profile để phát hiện và cảnh báo các mod bị thiếu thư viện, ngăn ngừa triệt để lỗi crash game khi khởi động.
 
-## 🌐 2. Tải mod qua trình duyệt phong cách Prism Launcher (Manual Browser Download)
+## 🌐 2. Tải mod qua trình duyệt hệ thống tải mod tự động (Manual Browser Download)
 - **Giải quyết triệt để lỗi CurseForge chặn tải:** Khắc phục trường hợp tác giả mod tắt quyền phân phối bên thứ ba khiến API không trả về link tải trực tiếp.
 - **Thuật toán Fallback thông minh:** Tự động thử nghiệm Edge CDN (`edge.forgecdn.net`). Nếu bị chặn (403/404), launcher tự động chuyển tiếp sang luồng tải thủ công qua trình duyệt.
 - **Giao diện tải thủ công chuyên nghiệp (`ManualDownloadModal`):**

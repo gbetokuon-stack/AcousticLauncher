@@ -336,7 +336,7 @@ function registerIpc() {
     const results = { installed: [], needsManual: [] }
 
     for (const item of items) {
-      if (item.needsManualDownload) {
+      if (item.needsManualDownload && !item.versionId && !item.modId && !item.downloadUrl) {
         results.needsManual.push(item)
         continue
       }
@@ -378,7 +378,7 @@ function registerIpc() {
     return results
   })
 
-  // ── Browser Download Manager (PrismLauncher-style) ──
+  // ── Browser Download Manager ──
   ipcMain.handle('browserDownload:start', async (_e, { profileId, expectedFiles }) => {
     const profileData = readJson(PROFILES_FILE, { profiles: [] })
     const profile = profileData.profiles.find(p => p.id === profileId)
